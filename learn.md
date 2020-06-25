@@ -1852,3 +1852,253 @@ func TestGetSingletonObj(t *testing.T) {
 	wg.Wait()
 }
 ```
+## 仅需任意任务完成
+
+```go
+package concurrency
+
+import (
+	"fmt"
+	"runtime"
+	"testing"
+	"time"
+)
+
+func runTask(id int) string {
+	time.Sleep(10 * time.Millisecond)
+	return fmt.Sprintf("The result is from %d", id)
+}
+
+func FirstResponse() string {
+	numOfRunner := 10
+	// ch := make(chan string)
+	ch := make(chan string, numOfRunner)
+	for i := 0; i < numOfRunner; i++ {
+		go func(i int) {
+			ret := runTask(i)
+			// 放消息，如果不是 buffer channel
+			// return 之后 没有从 channel 中取消息的 receiver
+			// 导致协程阻塞
+			ch <- ret
+		}(i)
+	}
+	// 当第一个人往 channel 中放消息后，接收消息的 receiver 就会从阻塞中被唤醒
+	// 一旦 channel 中有消息，则会直接 return 出去
+	return <- ch
+}
+
+func TestFirstRsponse(t *testing.T) {
+	// 输出当前系统中的协程数
+	t.Log("Before:", runtime.NumGoroutine())
+	t.Log(FirstResponse())
+	time.Sleep(time.Second * 1)
+	t.Log("After:", runtime.NumGoroutine())
+}
+//
+channel 
+    TestFirstRsponse: fisrt_response_test.go:34: Before: 2
+    TestFirstRsponse: fisrt_response_test.go:35: The result is from 4
+	TestFirstRsponse: fisrt_response_test.go:37: After: 11
+buffer channel
+    TestFirstRsponse: fisrt_response_test.go:34: Before: 2
+    TestFirstRsponse: fisrt_response_test.go:35: The result is from 4
+    TestFirstRsponse: fisrt_response_test.go:37: After: 2
+```
+
+## 所有任务完成
+
+可以使用 `sync.WaitGroup` 等待所有 `Task` 返回，也可以利用`CSP`模型。
+
+```go
+package util_all_done
+
+import (
+	"fmt"
+	"runtime"
+	"testing"
+	"time"
+)
+
+func runTask(id int) string  {
+	time.Sleep(10 * time.Millisecond)
+	return fmt.Sprintf("The result is from %d", id)
+}
+
+func AllResponse() string {
+	numOfRunner := 10
+	ch := make(chan string, numOfRunner)
+	for i := 0; i < 10; i++ {
+		go func(i int) {
+			ret := runTask(i)
+			ch <- ret
+		}(i)
+	}
+	finalRet := ""
+	for j := 0; j < numOfRunner; j++ {
+		finalRet += <- ch + "\n"
+	}
+	return finalRet
+}
+
+func TestAllResponse(t *testing.T) {
+	t.Log("Before:", runtime.NumGoroutine())
+	t.Log(AllResponse())
+	time.Sleep(time.Second * 1)
+	t.Log("After:", runtime.NumGoroutine())
+}
+```
+## 对象池
+
+将创建代价比较高的对象池化，避免重复创建，比如数据库连接、网络连接。
+
+**使用 buffered channel 实现对象池**
+
+归还对象 ---> 往 channel 中放数据
+
+获取对象 ---> 从 channel 中取数据
+
+```go
+package obj_pool
+
+import (
+	"errors"
+	"time"
+)
+
+type ReusableObj struct {
+
+}
+
+type ObjPool struct {
+	bufChan chan *ReusableObj // 用于缓冲可重用对象
+}
+
+func NewObjPool(numOfObj int) *ObjPool {
+	objPool := ObjPool{}
+	// 创建 channel
+	objPool.bufChan = make(chan *ReusableObj, numOfObj)
+	// channel 中添加对象
+	for i := 0; i < numOfObj; i++ {
+		objPool.bufChan <- &ReusableObj{}
+	}
+	return &objPool
+}
+
+func (p *ObjPool) GetObj(timeout time.Duration) (*ReusableObj, error) {
+	select {
+	case ret := <- p.bufChan:
+		return ret, nil
+	case <- time.After(timeout): //超时控制
+		return nil, errors.New("time out")
+	}
+}
+
+func (p *ObjPool) ReleaseObj(obj *ReusableObj) error {
+	select {
+	case p.bufChan <- obj:
+		return nil
+	default: // 放不进去时走该分支
+		return errors.New("overflow")
+	}
+}
+```
+
+## sync.Pool 对象缓存
+
+**sync.Pool对象获取**
+
+1、尝试从私有对象获取
+
+2、私有对象不存在，尝试从当前 Processor 的共享池获取
+
+3、如果当前 Processor 共享池也是空的，那么就尝试去其他 Processor 的共享池获取
+
+4、如果所有子池都是空的，最后就用用户指定的 New 函数产生一个新的对象返回。
+
+私有对象协程安全，共享池协程不安全。
+
+**sync.Pool对象的放回**
+
+1、如果私有对象不存在则保存为私有对象
+
+2、如果私有对象存在，放如当前 Processor 子池的共享池中
+
+**使用sync.Pool**
+
+```go
+// 创建池对象
+pool := &sync.Pool {
+	New: func() interface{} {
+		return 0
+	},
+}
+
+arry := pool.Get().(int)
+...
+pool.Put(10)
+```
+
+**sync.Pool对象的生命周期**
+
+1、GC 会清除 sync.pool 缓存的对象
+
+2、对象的缓存有效期为下一次 GC 之前
+
+对象的生命周期不可知。
+
+```go
+package obj_cache
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+	"testing"
+)
+
+func TestSyncPool(t *testing.T) {
+	pool := &sync.Pool {
+		New: func() interface{} {
+			fmt.Println("Create a new objcet.")
+			return 100
+		},
+	}
+
+	v := pool.Get().(int)
+	fmt.Println(v)
+	pool.Put(3)
+	runtime.GC() // GC会清除 sync.pool 中缓存的对象
+	v1, _ := pool.Get().(int)
+	fmt.Println(v1)
+}
+
+func TestSyncPoolInMutiGroutines(t *testing.T) {
+	pool := &sync.Pool {
+		New: func() interface{} {
+			fmt.Println("Create a new object.")
+			return 10
+		},
+	}
+	pool.Put(100)
+	pool.Put(100)
+	pool.Put(100)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			fmt.Println(pool.Get())
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+}
+```
+
+**sync.Pool 总结**
+
+1、适用于通过复用，降低复杂对象的创建和 GC 代价
+
+2、协程安全，会有锁的开销
+
+3、生命周期受 GC 影响，不适合于做连接池等，需自己管理生命周期的资源的池化
