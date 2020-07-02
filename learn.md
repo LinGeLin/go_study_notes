@@ -2102,3 +2102,524 @@ func TestSyncPoolInMutiGroutines(t *testing.T) {
 2、协程安全，会有锁的开销
 
 3、生命周期受 GC 影响，不适合于做连接池等，需自己管理生命周期的资源的池化
+
+# 测试
+
+## 内置单元测试框架
+
+1、Fail, Error: 该测试失败，该测试继续，其他测试继续执行
+
+2、FailNow, Fatal: 该测试失败，该测试终止，其他测试继续执行
+
+```go
+func TestErrorInCode(t *testing.T) {
+	fmt.Println("Start")
+	t.Error("Error")
+	fmt.Println("End")
+}
+
+func TestFailInCode(t *testing.T) {
+	fmt.Println("Start")
+	t.Fatal("Error")
+	fmt.Println("End")
+}
+```
+
+3、代码覆盖率
+```go
+go test -v -cover
+```
+
+4、断言
+https://github.com/stretchr/testify
+
+## Benchmark
+
+代码片段性能测评或者第三方库性能测评。函数名 `Benchmark` 开头
+
+执行测试
+
+```go
+// =. 或者匹配名字
+go test -bench=.
+
+// 查看内存
+go test -bench. -benchmem
+```
+
+```go
+func BenchmarkConcatStringByAdd(b *testing.B) {
+	// 与性能测试无关的代码
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// 测试代码
+	}
+	b.StopTimer()
+	// 与性能测试无关的代码
+}
+```
+
+```go
+package benchmark_test
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestConcatStringByAdd(t *testing.T) {
+	assert := assert.New(t)
+	elems := []string{"1", "2", "3", "4", "5"}
+	ret := ""
+
+	for _, elem := range elems {
+		ret += elem
+	}
+	assert.Equal("12345", ret)
+}
+
+func TestConcatStringByBytesBuffer(t *testing.T) {
+	assert := assert.New(t)
+	var buf bytes.Buffer
+	elems := []string{"1", "2", "3", "4", "5"}
+	for _, elem := range elems {
+		buf.WriteString(elem)
+	}
+	assert.Equal("12345", buf.String())
+}
+
+func BenchmarkConcatStringByAdd(b *testing.B) {
+	elems := []string{"1", "2", "3", "4", "5"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ret := ""
+		for _, elem := range elems {
+			ret += elem
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkConcatStringByBytesBuffer(b *testing.B) {
+	elems := []string{"1", "2", "3", "4", "5"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var buf bytes.Buffer
+
+		for _, elem := range elems {
+			buf.WriteString(elem)
+		}
+	}
+	b.StopTimer()
+}
+// 
+函数名  运行次数  每一次运行所耗时间（纳秒/次）
+BenchmarkConcatStringByAdd-2             7819069               139 ns/op
+BenchmarkConcatStringByBytesBuffer-2    15584764                72.5 ns/op
+```
+
+## BDD （Behavior Driven Development）行为驱动开发
+
+https://github.com/smartystreets/goconvey
+
+安装
+
+go get -u github.com/smartystreets/goconvery
+
+启动 WEB UI
+
+$GOPATH/bin/goconvey
+
+```go
+package testing
+import (
+	"testing"
+
+	. "github.com/smartystreets/goconvey/convey"
+)
+
+func TestSpec(t *testing.T) {
+	// Only pass t into top-level Convey calls
+	Convey("Given 2 even numbers", t, func() {
+		a := 2
+		b := 4
+
+		Convey("When add the two numbers", func() {
+			c := a + b
+
+			Convey("Then the result is still even", func() {
+				So(c%2, ShouldEqual, 0)
+			})
+		})
+	})
+}
+```
+
+# 反射与 Unsafe
+
+## 反射编程
+
+**reflect.TypeOf  vs  reflect.ValueOf**
+
+1、`reflect.TypeOf` 返回类型 (reflect.Type)
+
+2、`reflect.ValueOf` 返回值 (reflect.Value)
+
+3、可以从 `reflect.Value` 获得类型
+
+4、通过 `kind` 来判断类型
+
+**利用反射编写灵活的代码**
+
+1、按名字访问结构的成员
+
+```go
+reflect.ValueOf(*e).FieldByName("Name")
+```
+
+2、按名字访问结构的方法
+
+```go
+// 通过名字获取方法，Call 传入参数
+reflect.ValueOf(e).MethodByName("UpdatedAge").Call([]reflect.Value{reflect.ValueOf(1)})
+```
+
+**标记 Struct Tag**
+
+key value 结构
+
+```go
+type BasicInfo struct {
+	Name string `json:"name"`
+	Age int `json:"age"`
+}
+```
+
+```go
+if nameField, ok := reflect.TypeOf(*e).FieldByName("Name"); !ok {
+	t.Error("Failed to get 'Name' field.")
+} else {
+	t.Log("Tag:format", nameField.Tag.Get("format"))
+}
+// 
+Tag:format normal
+```
+
+```go
+package reflect_test
+
+import (
+	"fmt"
+	"reflect"
+	"testing"
+)
+
+func TestTypeAndValue(t *testing.T) {
+	var f int64 = 10
+	t.Log(reflect.TypeOf(f), reflect.ValueOf(f))
+	t.Log(reflect.ValueOf(f).Type())
+}
+
+// interface{} 空接口可以传入任意类型
+func CheckType(v interface{}) {
+	t := reflect.TypeOf(v)
+	switch t.Kind() {
+	case reflect.Float32, reflect.Float64:
+		fmt.Println("Float")
+	case reflect.Int, reflect.Int32, reflect.Int64:
+		fmt.Println("Integer")
+	default:
+		fmt.Println("Unknown", t)
+	}
+}
+
+func TestBasicType(t *testing.T) {
+	var f float64 = 12
+	CheckType(&f)
+}
+
+type Customer struct {
+	CookieID string
+	Name string
+	Age int
+}
+
+func TestDeepEqual(t *testing.T) {
+	a := map[int]string{1 : "one", 2 : "two", 3 : "three"}
+	b := map[int]string{1 : "one", 2 : "two", 3 : "three"}
+
+	t.Log("a==b?", reflect.DeepEqual(a, b))
+
+	s1 := []int{1, 2, 3}
+	s2 := []int{1, 2, 3}
+	s3 := []int{2, 3, 1}
+
+	t.Log("s1==s2?", reflect.DeepEqual(s1, s2))
+	t.Log("s1==s3?", reflect.DeepEqual(s1, s3))
+
+	c1 := Customer{"1", "Mike", 40}
+	c2 := Customer{"1", "Mike", 40}
+
+	fmt.Println(c1 == c2)
+	fmt.Println(reflect.DeepEqual(c1, c2))
+}
+
+type Employee struct {
+	EmployeeID string
+	Name string `format:"normal"`
+	Age int
+}
+
+func (e *Employee) UpdateAge(newVal int) {
+	e.Age = newVal
+}
+
+func TestInvokeByName(t *testing.T) {
+	e := &Employee{"1", "Mike", 30}
+	// 按名字获取成员
+
+	t.Logf("Name: value(%[1]v), Type(%[1]T)", reflect.ValueOf(*e).FieldByName("Name"))
+	if nameField, ok := reflect.TypeOf(*e).FieldByName("Name"); !ok {
+		t.Error("Failed to get 'Name' field.")
+	} else {
+		t.Log("Tag:format", nameField.Tag.Get("format"))
+	}
+
+	reflect.ValueOf(e).MethodByName("UpdateAge").Call([]reflect.Value{reflect.ValueOf(1)})
+	t.Log("Updated Age:", e)
+}
+```
+
+## 万能程序
+
+**DeepEqual**
+
+切片及 map 不能进行比较，只能和 nil 进行直接比较，可以使用 reflect 中的 `DeepEqual` 进行比较
+
+`"message": "invalid operation: a == b (map can only be compared to nil)`
+
+**关于反射**
+
+1、提高了程序的灵活性
+
+2、降低了程序的可读性
+
+3、降低了程序的性能
+
+```go
+package flexible_reflect
+
+import (
+	"errors"
+	"reflect"
+	"testing"
+)
+
+func TestDeepEqual(t *testing.T) {
+	a := map[int]string{1 : "one", 2 : "two", 3 : "three"}
+	b := map[int]string{1 : "one", 2 : "two", 3 : "three"}
+
+	// t.Log(a == b)
+	t.Log(reflect.DeepEqual(a, b))
+
+	s1 := []int{1, 2, 3}
+	s2 := []int{1, 2, 3}
+	s3 := []int{2, 3, 1}
+
+	t.Log("s1 == s2?", reflect.DeepEqual(s1, s2))
+	t.Log("s1 == s3?", reflect.DeepEqual(s1, s3))
+}
+
+type Employee struct {
+	EmployeeID string
+	Name string `format:"normal"`
+	Age int
+}
+
+type Customer struct {
+	CookieID string
+	Name string
+	Age int
+}
+
+func (e *Employee) UpdateAge(newVal int) {
+	e.Age = newVal
+}
+
+func fillBySettings(st interface{}, settings map[string]interface{}) error {
+	// func (v Value) Elem Value
+	// Elem return s the value that interface v contains or that the pointer v points to.
+	// It panics if v's Kind is not Interface or Ptr
+	// It return the zero Value if v is nil
+	
+	// 判断是不是指针
+	if reflect.TypeOf(st).Kind() != reflect.Ptr {
+		return errors.New("the first param should be a pointer to the struct type.")
+	}
+
+	// 判断是不是结构
+	if reflect.TypeOf(st).Elem().Kind() != reflect.Struct{
+		return errors.New("the first param should be a pointer to the struct type.")
+	}
+
+	if settings == nil {
+		return errors.New("settings is nil")
+	}
+
+	var (
+		field reflect.StructField
+		ok bool
+	)
+
+	for k, v := range settings {
+		if field, ok = (reflect.ValueOf(st)).Elem().Type().FieldByName(k); !ok {
+			continue
+		}
+		// 类型相同
+		if field.Type == reflect.TypeOf(v) {
+			vstr := reflect.ValueOf(st)
+			// Elem() 获取指针指向的具体的结构
+			vstr = vstr.Elem()
+			vstr.FieldByName(k).Set(reflect.ValueOf(v))
+		}
+	}
+	return nil
+}
+
+func TestFillNameAndAge(t *testing.T) {
+	settings := map[string]interface{}{"Name" : "Mike", "Age" : 30}
+	e := Employee{}
+
+	if err := fillBySettings(&e, settings); err != nil {
+		t.Fatal(err)
+	}
+	t.Log(e)
+
+	c := new(Customer)
+	if err := fillBySettings(c, settings); err != nil {
+		t.Fatal(err)
+	}
+	t.Log(*c)
+}
+```
+
+## 不安全编程
+
+主要是 c 交互的时候
+
+**不安全行为的危险性**
+
+```go
+i := 10
+// go 不支持强制类型转换，通过 unsafe.Pointer(&i)获取到指针之后可以转换为任何类型的指针
+f := *(*float64)(unsafe.Pointer(&i))
+```
+```go
+package unsafe_programming
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+)
+
+type Customer struct {
+	Name string
+	Age int
+}
+
+func TestUnsafe(t *testing.T) {
+	i := 10
+	f := *(*float64)(unsafe.Pointer(&i))
+	t.Log(unsafe.Pointer(&i))
+	t.Log(f)
+}
+
+type MyInt int
+
+// 合理的类型转换
+func TestConvert(t *testing.T) {
+	a := []int{1, 2, 3, 4}
+	b := *(*[]MyInt)(unsafe.Pointer(&a))
+	t.Log(b)
+}
+
+// 原子类型操作
+func TestAtomic(t *testing.T) {
+	var shareBufPtr unsafe.Pointer
+	writeDataFn := func() {
+		data := []int{}
+		for i := 0; i < 100; i++ {
+			data = append(data, i)
+		}
+		atomic.StorePointer(&shareBufPtr, unsafe.Pointer(&data))
+	}
+
+	readDataFn := func() {
+		data := atomic.LoadPointer(&shareBufPtr)
+		fmt.Println(data, *(*[]int)(data))
+	}
+
+	var wg sync.WaitGroup
+	writeDataFn()
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			for i := 0; i < 10; i++ {
+				writeDataFn()
+				time.Sleep(time.Microsecond * 100)
+			}
+			wg.Done()
+		}()
+		wg.Add(1)
+		go func() {
+			for i := 10; i < 10; i++ {
+				readDataFn()
+				time.Sleep(time.Microsecond * 100)
+			}
+			wg.Done()                
+		}()
+	}
+	wg.Wait()
+}
+```
+
+# 常见的架构模式的实现
+
+## 实现 pipe-filter framework(管式过滤) 
+
+1、非常适合数据处理及数据分析系统
+
+2、Filter 封装数据处理的功能
+
+3、松耦合：Filter 只跟数据（格式）耦合
+
+4、Pipe 用于连接 Filter 传递数据或者在异步处理过程中缓冲数据流，进程内同步调用时，pipe 演变为数据在方法调用间传递
+
+## Micro Kernel （微内核）
+
+公共的处理流程和通用的逻辑抽象出内核，其他一些扩展的功能用作插件
+
+**特点**
+
+1、易于扩展
+
+2、错误隔离
+
+3、保持架构一致性
+
+**要点**
+
+1、内核包含公共流程或通用逻辑
+
+2、将可变或可扩展部分规划为扩展点
+
+3、抽象扩展点行为，定义接口
+
+4、利用插件进行扩展 
