@@ -2623,3 +2623,1004 @@ func TestAtomic(t *testing.T) {
 3、抽象扩展点行为，定义接口
 
 4、利用插件进行扩展 
+
+# 常见任务
+
+## 内置 JSON 解析
+
+利用反射实现，通过 FieldTag 来标识对应的 json 值
+
+由反射可直接得到结构域，调用结构域中的 Tag 即可获取到 tag 进行处理。`reflect.StructFied.Tag`
+
+```go
+type BasicInfo struct {
+	Name string `json:"name"`
+	Age int `json:"age"`
+}
+
+type JonInfo struct {
+	Skills []string `json:"skills"`
+}
+
+type Employee struct {
+	BasicInfo BasicInfo `json:"basic_info"`
+	JobInfo JobInfo `json:"job_info"`
+}
+```
+
+```go
+package jsontest
+
+import (
+	"encoding/json"
+	"fmt"
+	"testing"
+)
+
+var jsonStr = `{
+	"basic_info":{
+		"name":"Mike",
+		"age":30
+	},
+	"job_info":{
+		"skills":["Java","Go","c"]
+	}
+}	`
+
+func TestEmbeddedJson(t *testing.T) {
+	e := new(Employee)
+	err := json.Unmarshal([]byte(jsonStr), e)
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Println(*e)
+
+	if v, err := json.Marshal(e); err == nil {
+		fmt.Println(string(v))
+	} else {
+		t.Error(err)
+	}
+}
+```
+
+## easyjson
+
+更块的 json 解析
+
+**安装**
+```go
+go get -u github.com/mailru/easyjson/
+```
+
+**使用**
+```go
+easyjson -all struct.go
+// 生成 struct_easyjson.go 文件，为对应结构添加四个方法
+
+// 将 struct 序列化为 json
+MarshJSON
+MarshEasyJson
+
+// 将 json 序列化为 struct
+UnmarshalJSON
+UnmarshalEasyJSON
+```
+
+**注释**
+```go
+//easyjson:skip 生成的时候跳过
+
+//easyjson:json 如果没有用到参数 all 或生成
+
+eg
+//easyjson:json
+type A struct {}
+```
+
+# HTTP 服务
+
+`net/http` 标准库
+
+**Default Router**
+
+```go
+func (sh serverHandler) ServerHTTP(rw ResponseWriter, req *Request) {
+	handler := sh.srv.Handler
+	if handler == nil {
+		handler = DefaultServerMux // 使用缺省的 Router
+	}
+	if req.RequestURI == "*" && req.Method == "OPTIONS" {
+		handler = globalOptionsHandler{}
+	}
+	handler.ServeHTTTP(rw, req)
+}
+```
+
+**路由规则**
+
+1、URL 分为两种，末尾是 `/` 表示一个子树，后面可以跟其他子路径；末尾不是 `/` 表示一个叶子，是固定路径。
+
+2、采用最长匹配原子，如果有多个匹配，一定采用匹配路径最长的那个进行处理
+
+3、如果没有找到任何匹配项，会返回 404 错误
+
+**名词解释**
+
+1、request ：用户请求的信息，用来解析用户的请求信息，包括 post、get、cookie、url 等
+
+2、response ：服务器返回给客户端的信息
+
+3、conn ： 用户的每次请求链接
+
+4、handler ： 处理请求和生成返回信息的处理逻辑
+
+- `func StatusText(code int) string`
+
+返回状态码所代表的信息
+
+```go
+fmt.Println(http.StatusText(200))
+```
+
+- `func CanonicalHeaderKey(s string) string`
+
+返回头域（表示为 Header 类型）的键 s 的规范化格式，让单词首字母和 '-' 后的第一个字母大写，其余字母小写
+
+```go
+fmt.Println(http.CanonicalHeaderKey("uid-test")) // Uid-Test
+fmt.Println(http.CanonicalHeaderKey("accept-encoding")) // Accept-Encoding
+```
+Canonical // 准确的，权威的
+
+- `func DetectContentType(data []byte) string`
+
+用于确定数据的 `Content-Type`， 函数总返回一个合法的 MIME 类型，如果它不能确定数据的类型，将返回 `application/octet-stream` 最多检查数据的前 512 字节
+
+> http header 的 Content-Type 一般有三种
+> application/x-www-form-urlencode：数据被编码为名称/值对，这是标准的编码格式
+> multipart/form-data：数据被编码为一条消息，页上的每个控件对应消息中的一个部分
+> text/plain：数据以纯文本（text/json/xml/html）进行编码，其中不含任何控件或格式字符。 postman 里标的时 RAW
+
+```go
+package main 
+import(
+    "fmt"
+    "net/http"
+)
+
+func main() {
+    cont1 := http.DetectContentType([]byte{}) //text/plain; charset=utf-8
+    cont2 := http.DetectContentType([]byte{1, 2, 3}) //application/octet-stream
+    cont3 := http.DetectContentType([]byte(`<HtMl><bOdY>blah blah blah</body></html>`)) //text/html; charset=utf-8
+    cont4 := http.DetectContentType([]byte("\n<?xml!")) //text/xml; charset=utf-8
+    cont5 := http.DetectContentType([]byte(`GIF87a`)) //image/gif
+    cont6 := http.DetectContentType([]byte("MThd\x00\x00\x00\x06\x00\x01")) //audio/midi
+    fmt.Println(cont1)
+    fmt.Println(cont2)
+    fmt.Println(cont3)
+    fmt.Println(cont4)
+    fmt.Println(cont5)
+    fmt.Println(cont6)
+}
+```
+
+- `func ParseTime(text string) (t time.Time, err error)`
+
+用三种格式 TimeFormat，time.RFC850 和 time.ANSIC 尝试解析一个时间头的值 (Data:header)
+
+```go
+package main 
+import(
+    "fmt"
+    "net/http"
+    "time"
+)
+
+
+var parseTimeTests = []struct {
+    h   http.Header
+    err bool
+}{
+    {http.Header{"Date": {""}}, true},
+    {http.Header{"Date": {"invalid"}}, true},
+    {http.Header{"Date": {"1994-11-06T08:49:37Z00:00"}}, true},
+    {http.Header{"Date": {"Sun, 06 Nov 1994 08:49:37 GMT"}}, false},
+    {http.Header{"Date": {"Sunday, 06-Nov-94 08:49:37 GMT"}}, false},
+    {http.Header{"Date": {"Sun Nov  6 08:49:37 1994"}}, false},
+}
+
+func main() {
+    expect := time.Date(1994, 11, 6, 8, 49, 37, 0, time.UTC)
+    fmt.Println(expect) //1994-11-06 08:49:37 +0000 UTC
+    for i, test := range parseTimeTests {
+        d, err := http.ParseTime(test.h.Get("Date"))
+        fmt.Println(d)
+        if err != nil {
+            fmt.Println(i, err)
+            if !test.err { //test.err为false才进这里
+                fmt.Errorf("#%d:\n got err: %v", i, err)
+            }
+            continue //有错的进入这后继续下一个循环，不往下执行
+        }
+        if test.err { //test.err为true，所以该例子中这里不会进入
+            fmt.Errorf("#%d:\n  should err", i)
+            continue
+        }
+        if !expect.Equal(d) { //说明后三个例子的结果和expect是相同的，所以没有报错
+            fmt.Errorf("#%d:\n got: %v\nwant: %v", i, d, expect)
+        }
+    }
+}
+
+//
+userdeMBP:go-learning user$ go run test.go
+1994-11-06 08:49:37 +0000 UTC
+0001-01-01 00:00:00 +0000 UTC //默认返回的空值
+0 parsing time "" as "Mon Jan _2 15:04:05 2006": cannot parse "" as "Mon"
+0001-01-01 00:00:00 +0000 UTC
+1 parsing time "invalid" as "Mon Jan _2 15:04:05 2006": cannot parse "invalid" as "Mon"
+0001-01-01 00:00:00 +0000 UTC
+2 parsing time "1994-11-06T08:49:37Z00:00" as "Mon Jan _2 15:04:05 2006": cannot parse "1994-11-06T08:49:37Z00:00" as "Mon"
+1994-11-06 08:49:37 +0000 UTC
+1994-11-06 08:49:37 +0000 GMT
+1994-11-06 08:49:37 +0000 UTC
+```
+
+- `func Date(year int, month Month, day, hour, min, sec, nsec int, loc *Location) Time`
+
+- `func ParseHTTPVersion(ver string) (major, minor int, ok bool)`
+
+解析 HTTP 版本字符串，如 `HTTP/1.0` 返回（1，0，true）
+
+**header**
+
+服务端和客户端的数据都有头部
+
+`type Header`
+
+```go
+type Header map[string][]string
+
+http.Header{"Date":{"1994-11-06T08:49:37Z00:00"}}
+```
+
+- `func (h Header) Get(key string) string`
+
+返回键对应的第一个值，如果键不存在返回""
+
+- `func (h Header) Set(key, value string)`
+
+添加键值对到h，如键已存在则会用只有新值一个元素的切片取代旧值切片
+
+- `func (h Header) Add(key, value string)`
+
+添加键值对到h，如键存在，新值添加到旧值切片后面
+
+- `func (h Header) Del(key string)`
+
+删除键值对
+
+- `func (h Header) Writer(w io.Writer) err`
+
+Write 以有线格式将头域写入 w
+
+- `func (h Header) WriteSubset(w io.Writer, exclude map[string]bool) error`
+
+WriteSubset 以有线格式将头域写入 w，当 exclude 不为 nil 时，如果 h 的键值对的键在 exclude 中存在，且其对应值为真，该键值对就不会被写入 w
+
+*围绕 `io.Reader/Writer` 几个常用的实现：*
+>`net.Conn`，`os.Stdio`，`os.File`：网络、标准输入输出、文件的流读取
+>
+>`strings.Reader`：把字符串抽象成 Reader
+>`bytes.Reader`：把 `[]byte` 抽象成 Reader
+>`bytes.Buffer`：把 `[]byte` 抽象成 Reader 和 Writer
+>`bufio.Reader/Writer`：抽象成带缓冲的流读取
+
+**Cookie**
+
+session 和 cookie 的区别？
+
+session 是存储在服务器的文件，cookie 内容保存在客户端，存在被呵护篡改的情况，session 保存在服务端，可以防止被用户篡改。
+
+**type Cookie**
+
+Cookie 代表一个出现在 HTTP 回复的头域中 `Set-Cookie` 头里的值里，或者 HTTP 请求头域中 Cookie 头的值里
+```go
+type Cookie struct {
+	Name		string
+	Value		string
+	Path		string
+	Domain		string
+	Expires		time.Time
+	RawExpires	string
+	// MaxAge = 0 表示未设置 Max-Age 属性
+	// MaxAge < 0 表示立刻删除该 cookie，等价于 "Max-Age: 0"
+	// MaxAge > 0 表示存在 Max-Age 属性，单位是秒
+	MaxAge		int
+	Secure		bool
+	HttpOnly	bool
+	Raw			string
+	Unparsed	[]string	// 未解析的 "属性-值"对的原始文本
+}
+```
+
+- `func (c *Cookie) String() string`
+
+返回该 cookie 的序列化结果。如果只设置了 Name 和 Value 字段，序列化结果可用于 HTTP 请求的 Cookie 头或者 HTTP 回复的 Set-Cookie 头，如果设置了其他字段，则只能用于回复。
+
+```go
+Cookie := &http.Cookie{Name: "cookie-10", Value: "expiring-1601", Expires: time.Date(1601, 1, 1, 1, 1, 1, 1, time.UTC)}
+Raw := "cookie-101=expiring-1601; Expires=Mon, 01 Jan 1601 01:01:01 GMT"
+
+Cookie == Raw
+```
+
+- `func SetCookie(w ResponseWriter, cookie *Cookie)`
+
+在 w 的头域中添加 Set-Cookie 头
+
+常用来给 request 和 response 设置 cookie，然后使用 request 的 Cookies()、Cookie(name string) 函数和 response 的 Cookie() 函数来获取设置的 cookie 信息
+
+**type ResponseWriter**
+
+ResponseWrite 接口被 HTTP 处理器用于构造 HTTP 回复
+```go
+type ResponseWriter interface {
+    // Header返回一个Header类型值，该值会被WriteHeader方法发送。
+    // 在调用WriteHeader或Write方法后再改变该对象是没有意义的。
+    Header() Header
+    // WriteHeader该方法发送HTTP回复的头域和状态码。
+    // 如果没有被显式调用，第一次调用Write时会触发隐式调用WriteHeader(http.StatusOK)
+    // WriterHeader的显式调用主要用于发送错误码。
+    WriteHeader(int)
+    // Write向连接中写入作为HTTP的一部分回复的数据。
+    // 如果被调用时还未调用WriteHeader，本方法会先调用WriteHeader(http.StatusOK)
+    // 如果Header中没有"Content-Type"键，
+    // 本方法会使用包函数DetectContentType检查数据的前512字节，将返回值作为该键的值。
+    Write([]byte) (int, error)
+}
+```
+
+**type CookieJar**
+
+CookieJar 管理 cookie 的存储和在 HTTP 请求中的使用。CookieJar 的实现必须能安全的被多个 go 程同时使用。
+```go
+type CookieJar interface {
+	// SetCookies 管理从u的回复中收到的cookie
+	// 根据其策略和实现，它可以选择是否存储cookie
+	SetCookies(u *url.URL, cookies []*Cookie)
+	// Cookies 返回发送请求到u时应使用的cookie
+	// 本方法有责任遵守RFC 6265规定的标准cookie限制
+	Cookies(u *url.URL) []*Cookie
+}
+```
+
+**type Request**
+
+```go
+type Request struct {
+    // Method指定HTTP方法（GET、POST、PUT等）。对客户端，""代表GET。
+    Method string
+    // URL在服务端表示被请求的URI，在客户端表示要访问的URL。
+    //
+    // 在服务端，URL字段是解析请求行的URI（保存在RequestURI字段）得到的，
+    // 对大多数请求来说，除了Path和RawQuery之外的字段都是空字符串。
+    // （参见RFC 2616, Section 5.1.2）
+    //
+    // 在客户端，URL的Host字段指定了要连接的服务器，
+    // 而Request的Host字段（可选地）指定要发送的HTTP请求的Host头的值。
+    URL *url.URL
+    // 接收到的请求的协议版本。本包生产的Request总是使用HTTP/1.1
+    Proto      string // "HTTP/1.0"
+    ProtoMajor int    // 1
+    ProtoMinor int    // 0
+    // Header字段用来表示HTTP请求的头域。如果头域（多行键值对格式）为：
+    //    accept-encoding: gzip, deflate
+    //    Accept-Language: en-us
+    //    Connection: keep-alive
+    // 则：
+    //    Header = map[string][]string{
+    //        "Accept-Encoding": {"gzip, deflate"},
+    //        "Accept-Language": {"en-us"},
+    //        "Connection": {"keep-alive"},
+    //    }
+    // HTTP规定头域的键名（头名）是大小写敏感的，请求的解析器通过规范化头域的键名来实现这点。
+    // 在客户端的请求，可能会被自动添加或重写Header中的特定的头，参见Request.Write方法。
+    Header Header
+    // Body是请求的主体。
+    //
+    // 在客户端，如果Body是nil表示该请求没有主体买入GET请求。
+    // Client的Transport字段会负责调用Body的Close方法。
+    //
+    // 在服务端，Body字段总是非nil的；但在没有主体时，读取Body会立刻返回EOF。
+    // Server会关闭请求的主体，ServeHTTP处理器不需要关闭Body字段。
+    Body io.ReadCloser
+    // ContentLength记录相关内容的长度。
+    // 如果为-1，表示长度未知，如果>=0，表示可以从Body字段读取ContentLength字节数据。
+    // 在客户端，如果Body非nil而该字段为0，表示不知道Body的长度。
+    ContentLength int64
+    // TransferEncoding按从最外到最里的顺序列出传输编码，空切片表示"identity"编码。
+    // 本字段一般会被忽略。当发送或接受请求时，会自动添加或移除"chunked"传输编码。
+    TransferEncoding []string
+    // Close在服务端指定是否在回复请求后关闭连接，在客户端指定是否在发送请求后关闭连接。
+    Close bool
+    // 在服务端，Host指定URL会在其上寻找资源的主机。
+    // 根据RFC 2616，该值可以是Host头的值，或者URL自身提供的主机名。
+    // Host的格式可以是"host:port"。
+    //
+    // 在客户端，请求的Host字段（可选地）用来重写请求的Host头。
+    // 如过该字段为""，Request.Write方法会使用URL字段的Host。
+    Host string
+    // Form是解析好的表单数据，包括URL字段的query参数和POST或PUT的表单数据。
+    // 本字段只有在调用ParseForm后才有效。在客户端，会忽略请求中的本字段而使用Body替代。
+    Form url.Values
+    // PostForm是解析好的POST或PUT的表单数据。
+    // 本字段只有在调用ParseForm后才有效。在客户端，会忽略请求中的本字段而使用Body替代。
+    PostForm url.Values
+    // MultipartForm是解析好的多部件表单，包括上传的文件。
+    // 本字段只有在调用ParseMultipartForm后才有效。
+    // 在客户端，会忽略请求中的本字段而使用Body替代。
+    MultipartForm *multipart.Form
+    // Trailer指定了会在请求主体之后发送的额外的头域。
+    //
+    // 在服务端，Trailer字段必须初始化为只有trailer键，所有键都对应nil值。
+    // （客户端会声明哪些trailer会发送）
+    // 在处理器从Body读取时，不能使用本字段。
+    // 在从Body的读取返回EOF后，Trailer字段会被更新完毕并包含非nil的值。
+    // （如果客户端发送了这些键值对），此时才可以访问本字段。
+    //
+    // 在客户端，Trail必须初始化为一个包含将要发送的键值对的映射。（值可以是nil或其终值）
+    // ContentLength字段必须是0或-1，以启用"chunked"传输编码发送请求。
+    // 在开始发送请求后，Trailer可以在读取请求主体期间被修改，
+    // 一旦请求主体返回EOF，调用者就不可再修改Trailer。
+    //
+    // 很少有HTTP客户端、服务端或代理支持HTTP trailer。
+    Trailer Header
+    // RemoteAddr允许HTTP服务器和其他软件记录该请求的来源地址，一般用于日志。
+    // 本字段不是ReadRequest函数填写的，也没有定义格式。
+    // 本包的HTTP服务器会在调用处理器之前设置RemoteAddr为"IP:port"格式的地址。
+    // 客户端会忽略请求中的RemoteAddr字段。
+    RemoteAddr string
+    // RequestURI是被客户端发送到服务端的请求的请求行中未修改的请求URI
+    // （参见RFC 2616, Section 5.1）
+    // 一般应使用URI字段，在客户端设置请求的本字段会导致错误。
+    RequestURI string
+    // TLS字段允许HTTP服务器和其他软件记录接收到该请求的TLS连接的信息
+    // 本字段不是ReadRequest函数填写的。
+    // 对启用了TLS的连接，本包的HTTP服务器会在调用处理器之前设置TLS字段，否则将设TLS为nil。
+    // 客户端会忽略请求中的TLS字段。
+    TLS *tls.ConnectionState
+}
+```
+
+// 剩余内容
+
+https://www.cnblogs.com/wanghui-garcia/p/10354854.html
+
+## 构建 Restful 服务
+
+符合 REST 约束风格和原则的应用程序或设计就是 RESTful
+
+REST 主要规范了：
+
+1、定位资源的 URL 风格
+
+2、如何对资源操作
+
+REST的主要原则：
+
+1、网络上的所有事物都被抽象为资源
+
+2、每个资源都有唯一的资源标识符
+
+3、同一资源具有多种表现形式（xml，json）
+
+4、对资源的各种操作不会改变资源标识符
+
+5、所有的操作都是无状态的
+
+6、符合 REST 原则的架构方式即可成为 RESTful
+
+**更好的Router**
+
+https://github.com/julienschmidt/httprouter
+
+```go
+func Hello(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	fmt.Fprintf(w, "hello, %s!\n", ps.ByName("name"))
+}
+
+func main() {
+	router := httprouter.New()
+	router.GET("/", Index)
+	router.GET("/hello/:name" Hello)
+
+	log.Fatal(http.ListenAndServer(":8080", router))
+}
+```
+
+**ROA 面向资源的架构（Resource Oriented Architecture）**
+
+# 性能调优
+
+## 性能分析工具
+go 内置了很多性能分析工具
+
+**准备工作**
+
+1、安装 graphviz （图形工具）
+
+2、将 $GOPATH/bin 加入 $PATH
+
+3、安装 go-torch
+
+	go get github.com/uber/go-torch
+
+	下载并复制 flamegraph.pl 到 $GOPATH/bin
+
+	将 $GOPATH/bin 添加到 $PATH
+
+**通过文件方式输出 Profile**
+
+1、灵活性高，适用于特定代码端的分析
+
+2、通过手动调用 runtime/pprof 的 API
+
+3、API 相关文档 https://studygolang.com/static/pkgdoc/pkg/runtime_pprof.htm
+
+4、go tool pprof [binary] [binary.prof]
+
+**通过 HTTP 方式输出 Profile**
+
+1、简单，适合于持续性运行的应用
+
+2、在应用程序中导入 import _ "net/http/pprof" 并启动 http server 即可
+
+3、http://<host>:<port>/debug/pprof/
+
+4、go tool pprof http://<host>:<port>/debug/pprof/profile?seconds=10（默认值为30秒）
+
+5、go-torch -seconds 10 http://<host>:<port>/debug/pprof/profile
+
+## 性能调优的示例
+
+**调优过程**
+
+Start -> 设定优化目标 -> 分析系统瓶颈点 -> 优化瓶颈点 -> Start/End
+
+**常见的分析指标**
+
+指标 | 分析
+---  | ---
+Wall Time | 挂钟时间，程序运行的绝对时间，某个函数运行的绝对时间
+CPU Time  | CPU 消耗时间
+Block Time | 阻塞时间
+Memory allocation | 内存分配
+GC times/time spent | GC 次数， GC 耗时
+
+**go 拼接字符串得三种方法**
+
+使用 `+` 拼接字串会严重影响运行性能
+
+1、使用 `bytesBuffer` 拼接字符串
+
+```go
+sArr := []string{"a", "b", "c", "d"}
+var buffer bytes.Buffer
+for i, str := range sArr {
+	// Itoa 将整数转换为字符串
+	buffer.WriteString(str)
+}
+fmt.Println(buffer.String)
+```
+2、构建数组切片得方式拼接子串
+
+```go
+sArr := []string{"a", "b", "c", "d"}
+fmt.Println(strings.Join(sArr, ""))
+```
+
+3、使用 `strings.Builder`
+```go
+var b strings.Builder
+for _, str := range sArr {
+	b.WriteString(str)
+}
+fmt.Println(b.String())
+```
+
+**优化思路**
+
+1、生成 cpu.prof 优化耗时时间
+
+2、生成 mem.prof 优化内存
+
+3、生成 goroutine.prof 优化协程
+
+**常见得性能优化点**
+
+- 【CPU】
+
+1、去除不必要的序列化/反序列化：标准的 json 非常消耗性能，可以考虑 easyjson 或者 grpc
+
+2、线程泄漏：goroutine 飞出去之后忘记 stop/close，尤其是 time.ticket 之类的定时器
+
+3、避免不必要的 goroutine，过多的 goroutine 会导致效果过多 CPU
+
+- 【MEM】
+
+1、减少 GC：eg，字符串的传递都是值拷贝，如果数据量打，会差生大量 GC，可以用 byte 数据代替。
+
+2、内存预分配：slice append 的时候空间不够导致不停的 copy 数据来扩大数组大小
+
+- 【DISK】
+
+减少磁盘随机读写IO：磁盘寻道需要花费很多时间
+
+- 【NET】
+
+尽量时候 grpc 代替 http
+
+## 别让性能被锁住
+
+map 不支持线程安全
+
+**sync.Map**
+
+以空间换时间，分为两部分，一是读部分（Read），一是读写部分（Dirty）原子指针指向value，指向相同的value
+
+1、线程安全
+
+2、适合读多写少，且 Key 相对稳定的环境
+
+3、采用空间换时间的方案，并且采用指针的方式间接实现值得映射，所以存储空间会比 build-in map （原生map）大
+
+**Concurrent Map**
+
+适合读写很频繁的情况
+
+原理：普通 map 加锁，锁住真个map，锁的冲突概率很大，而 Concurrent Map，利用分段锁的思想，有多个锁，没把锁锁一段数据，这样在多线程访问不同数据段的锁时，锁竞争的概率比较小。
+
+
+1、减少锁的影响范围
+
+2、减少发生锁冲突的概率
+
+	sync.Map
+
+	ConcurrentMap
+
+3、避免锁的使用
+
+LAMX Disruptor： https://martinfowler.com/articles/lmax.html
+
+## GC 友好的代码
+
+打开 GC 日志 `GODEBUG=gctrace=1`
+
+**避免内存分配和复制**
+
+复杂对象尽量传递引用
+
+	数组的传递
+
+	结构体的传递
+
+初始化至合适的大小
+
+	自动扩容是有代价的
+
+复用内存
+
+**go tool trace**
+
+```go
+//普通程序输出 trace 信息
+
+package main
+
+import (
+	"os"
+	"runtime/trace"
+)
+
+func main() {
+	f, err := os.Create("trace.out")
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	err = trace.Start(f)
+	if err != nil {
+		panic(err)
+	}
+
+	defer trace.Stop()
+	// your program here
+}
+
+
+// 测试程序输入 trace 信息
+go test -trace trace.out
+
+
+// 可视化 trace 信息
+go tool trace trace.out
+```
+
+```go
+package auto_growing
+
+import "testing"
+
+const numOfElems = 100000
+const times = 1000
+
+func TestAutoGrow(t *testing.T) {
+	for i := 0; i < times; i++ {
+		s := []int{}
+		for j := 0; j < numOfElems; j++ {
+			s = append(s, j)
+		}
+	}
+}
+
+func TestProperInit(t *testing.T) {
+	for i := 0; i < times; i++ {
+		s := make([]int, 0, 100000)
+		for j := 0; j < numOfElems; j++ {
+			s = append(s, j)
+		}
+	}
+}
+
+func TestOverSizeInit(t *testing.T) {
+	for i := 0; i < times; i++ {
+		s := make([]int, 0, 800000)
+		for j := 0; j < numOfElems; j++ {
+			s = append(s, j)
+		}
+	}
+}
+
+func BenchmarkAutoGrow(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		s := []int{}
+		for j := 0; j < numOfElems; j++ {
+			s = append(s, j)
+		}
+	}
+}
+
+func BenchmarkProperInit(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		s := make([]int, 0, numOfElems)
+		for j := 0; j < numOfElems; j++ {
+			s = append(s, j)
+		}
+	}
+}
+
+func BenchmarkOverSizeInit(b *testing.B) {
+	for i := 0; i< b.N; i++ {
+		s := make([]int, 0, numOfElems * 8)
+		for j := 0; j < numOfElems; j++ {
+			s = append(s, j)
+		}
+	}
+}
+
+// go test -v
+=== RUN   TestAutoGrow
+--- PASS: TestAutoGrow (0.45s)
+=== RUN   TestProperInit
+--- PASS: TestProperInit (0.09s)
+=== RUN   TestOverSizeInit
+--- PASS: TestOverSizeInit (0.40s)
+PASS
+ok      ch43/gc_friendly/auto_growing   0.946s
+
+// go test -bench=.
+goos: linux
+goarch: amd64
+pkg: ch43/gc_friendly/auto_growing
+BenchmarkAutoGrow-2                 2870            432103 ns/op
+BenchmarkProperInit-2              12379             99631 ns/op
+BenchmarkOverSizeInit-2             2773            401688 ns/op
+PASS
+ok      ch43/gc_friendly/auto_growing   6.379s
+```
+
+# 高可用性服务设计
+
+## 高效字符串拼接
+
+推荐使用 strings.Builder，效率高
+
+```go
+package concat_string
+
+import (
+	"bytes"
+	"fmt"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+const numbers = 100
+
+func BenchmarkSprintf(b *testing.B) {
+	b.ResetTimer()
+	for idx := 0; idx < b.N; idx++ {
+		var s string
+		for i := 0; i < numbers; i++ {
+			s = fmt.Sprintf("%v%v", s, i)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkStringBuilder(b *testing.B) {
+	b.ResetTimer()
+	for idx := 0; idx < b.N; idx++ {
+		var builder strings.Builder
+		for i := 0; i < numbers; i++ {
+			builder.WriteString(strconv.Itoa(i))
+		}
+		_ = builder.String()
+	}
+	b.StopTimer()
+}
+
+func BenchmarkBytesBuf(b *testing.B) {
+	b.ResetTimer()
+	for idx := 0; idx < b.N; idx++{
+		var buf bytes.Buffer
+		for i := 0; i < numbers; i++ {
+			buf.WriteString(strconv.Itoa(i))
+		}
+		_ = buf.String()
+	}
+	b.StopTimer()
+}
+
+func BenchmarkStringAdd(b *testing.B) {
+	b.ResetTimer()
+	for idx := 0; idx < b.N; idx++ {
+		var s string
+		for i := 0; i < numbers; i++ {
+			s += strconv.Itoa(i)
+		}
+	}
+	b.StopTimer()
+}
+
+
+//
+goos: linux
+goarch: amd64
+pkg: ch44
+BenchmarkSprintf-2                 69310             17330 ns/op
+BenchmarkStringBuilder-2         1529116               775 ns/op
+BenchmarkBytesBuf-2              1236168               987 ns/op
+BenchmarkStringAdd-2              224438              4807 ns/op
+```
+
+## 面向错误的设计
+
+> Once you accept the failures will heppen, you have the ability to design your system's reaction to the failures
+
+**隔离**
+
+当系统的一部分发生错误时，尽量减少对其他部分的影响，让系统仍能以一定程度的功能进行工作。eg 微内核模式
+
+**隔离错误 - 部署**
+
+微服务
+
+**重用 vs 隔离**
+
+逻辑结构的重用 vs 部署结构的隔离
+
+**冗余**
+
+Load Balancer -> Online Service & Standby Service(备用服务)
+
+Load Balancer -> Online Redundancy(冗余)
+
+**单点失效**
+
+QPS 1500 -> Max QPS 1000 & Max QPS 1000
+
+**限流**
+
+token bucket
+
+Request -> have token? -> response
+
+**慢响应**
+
+不要无休止的等待，给阻塞操作加上一个期限，eg timeout
+
+**错误传递**
+
+断路器配合服务降级。服务出错之后，短路器开启，使用 cache 住的结果或降级服务响应。
+
+
+## 面向恢复的设计
+
+**健康检查**
+
+- 注意僵尸进程
+
+	池化资源耗尽
+
+	死锁
+
+http ping 检查进程在不在，一定要 cover 关键路径。
+
+**Let it Crash！**
+
+```go
+defer func() {
+	if err := recover(); err != nil {
+		log.Error("recovered panic" err)
+	}
+}()
+```
+
+**构建可恢复的系统**
+
+1、拒绝单体系统
+
+2、面向错误和恢复的设计
+
+	1、在依赖服务不可用时，可以继续存活
+
+	2、快速启动
+
+	3、无状态
+
+**与客户端协商**
+
+服务器：我太忙了，请慢点发送数据
+
+client：好，我一分钟后再发送
+
+## Chaos Engineering 混沌工程
+
+> if something hurts, do it more often!
+
+将故障扼杀再襁褓之中，主动制造故障，测试系统在各种压力下的行为，识别并修复故障问题。
+
+混沌工程以实验发现系统性弱点：
+
+1、定义并测量系统的稳定状态
+
+2、创建假设
+
+3、模拟现实世界中可能发生的事情
+
+4、证明或反驳你的假设
+
+> 目前有如下混沌工程实践方法：模拟数据中心的故障、强制系统时钟不同步、在驱动程序代码中模拟I/O异常、模拟服务之间的延迟、随机引发函数抛异常
+
+- 原则
+
+建立稳定状态的假设
+
+多样化现实世界事件
+
+在生产环境运行实验
+
+持续自动化运行实验
+
+最小化“爆炸半径”
+
+- 相关开源项目
+
+https://github.com/Netflix/chaosmonkey
+
+
