@@ -1069,6 +1069,29 @@ defer func() {
 	}
 }()
 ```
+
+recover 是 Go语言的一个内建函数，可以让进入宕机流程的 goroutine 恢复过来，recover 仅在延迟函数中有效，在正常执行过程中，调用 recover 会返回 nil，并且没有其他任何后果。如果当前 goroutine 陷入恐慌，调用 recover 可以捕获 panic 的输入值，并且恢复正常的运行。
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	defer func() {
+		fmt.Print(recover())
+	}()
+
+	defer func() {
+		defer fmt.Print(recover())
+		//panic(1)
+		// 注释掉输出 2<nil>
+		// 不注释输出 21
+	}()
+	defer recover()
+	panic(2)
+}
+```
 ```go
 package panic_recover
 
